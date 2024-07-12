@@ -52,7 +52,7 @@ TEMPLATE_REDSHIFT_TYPE = 'nearest'
 
 PLOTLY_LAYOUT_KWARGS = {'template':'plotly_white', 'showlegend':False}
 
-MULTIPROCESSING_TIMEOUT = 600
+JOBLIB_RETURN_AS = "generator_unordered"
 
 class PhotoZ(object):
     ZML_WITH_PRIOR = None
@@ -1550,7 +1550,7 @@ class PhotoZ(object):
         import numpy as np
         import matplotlib.pyplot as plt
         import time
-        import multiprocessing as mp
+        import joblib
         
         if 'selection' in kwargs:
             idx = kwargs['selection']
@@ -1574,7 +1574,7 @@ class PhotoZ(object):
         efnu_corr[missing] = self.param['NOT_OBS_THRESHOLD'] - 9.
         
         t0 = time.time()
-        if (n_proc == 0) | (mp.cpu_count() == 1):
+        if (n_proc == 0) | (joblib.cpu_count() == 1):
             # Serial by redshift
             np_check = 1
             for iz, z in tqdm(enumerate(self.zgrid)):
@@ -1592,32 +1592,31 @@ class PhotoZ(object):
                 self.fit_coeffs[idx_fit,iz,:] = _res[2]
                 
         else:
-            # With multiprocessing
+            # With joblib
             if n_proc < 0:
-                np_check = mp.cpu_count()
+                np_check = joblib.cpu_count()
             else:
-                np_check = np.minimum(mp.cpu_count(), n_proc)
+                np_check = np.minimum(joblib.cpu_count(), n_proc)
         
-            pool = mp.Pool(processes=np_check)
-        
-            jobs = [pool.apply_async(fit_by_redshift,
-                                      (iz,
-                                       z,
-                                       self.tempfilt(self.zgrid[iz]),
-                                       fnu_corr,
-                                       efnu_corr,
-                                       self.TEF(z),
-                                       self.zp,
-                                       self.param.params['VERBOSITY'],
-                                       fitter)
-                                      ) 
-                       for iz, z in enumerate(self.zgrid)]
+            from joblib import Parallel, delayed
+            jobs = Parallel(n_jobs=np_check, return_as=JOBLIB_RETURN_AS)(
+                delayed(fit_by_redshift)(
+                    iz,
+                    z,
+                    self.tempfilt(self.zgrid[iz]),
+                    fnu_corr,
+                    efnu_corr,
+                    self.TEF(z),
+                    self.zp,
+                    self.param.params['VERBOSITY'],
+                    fitter
+                )
+                for iz, z in enumerate(self.zgrid)
+            )
 
-            pool.close()
-        
             # Gather results
-            for res in tqdm(jobs):
-                iz, chi2, coeffs = res.get(timeout=MULTIPROCESSING_TIMEOUT)
+            for res in tqdm(jobs, total=len(self.zgrid)):
+                iz, chi2, coeffs = res
                 self.chi2_fit[idx_fit,iz] = chi2
                 self.fit_coeffs[idx_fit,iz,:] = coeffs
         
@@ -1720,7 +1719,7 @@ class PhotoZ(object):
         redshift from the `zml` attribute.
         
         """
-        import multiprocessing as mp
+        import joblib
                 
         #izbest = np.argmin(self.chi2_fit, axis=1)
         izbest = self.izbest*1
@@ -1774,9 +1773,9 @@ class PhotoZ(object):
         np.random.seed(self.random_seed)
         
         if n_proc <= 0:
-            np_check = np.maximum(mp.cpu_count() - 2, 1)
+            np_check = np.maximum(joblib.cpu_count() - 2, 1)
         else:
-            np_check = np.minimum(mp.cpu_count(), n_proc)
+            np_check = np.minimum(joblib.cpu_count(), n_proc)
             
         # Fit in parallel mode        
         t0 = time.time()
@@ -1810,24 +1809,23 @@ class PhotoZ(object):
                 self.coeffs_draws[_ix,:,:] = _cdraws
             
         else:
-            # Multiprocessing
-            pool = mp.Pool(processes=np_check)
-            jobs = [pool.apply_async(_fit_at_zbest_group, 
-                                          (idx[i::skip], 
-                                           fnu_corr[idx[i::skip],:], 
-                                           efnu_corr[idx[i::skip],:], 
-                                           self.zbest[idx[i::skip]], 
-                                           self.zp*1, get_err, 
-                                           fitter, self.tempfilt, self.TEF,
-                                           self.ARRAY_DTYPE, None)) 
-                        for i in range(skip)]
 
-            pool.close()
-            pool.join()
+            from joblib import Parallel, delayed
+            jobs = Parallel(n_jobs=np_check, return_as=JOBLIB_RETURN_AS)(
+                delayed(_fit_at_zbest_group)(
+                    idx[i::skip],
+                    fnu_corr[idx[i::skip],:],
+                    efnu_corr[idx[i::skip],:],
+                    self.zbest[idx[i::skip]],
+                    self.zp*1, get_err,
+                    fitter, self.tempfilt, self.TEF,
+                    self.ARRAY_DTYPE, None
+                )
+                for i in range(skip)
+            )
 
             for res in jobs:
-                _ = res.get(timeout=MULTIPROCESSING_TIMEOUT)
-                _ix, _coeffs_best, _fmodel, _efmodel, _chi2_best, _cdraws = _
+                _ix, _coeffs_best, _fmodel, _efmodel, _chi2_best, _cdraws = res
                 self.coeffs_best[_ix,:] = _coeffs_best
                 self.fmodel[_ix,:] = _fmodel
                 self.efmodel[_ix,:] = _efmodel
@@ -3361,7 +3359,7 @@ class PhotoZ(object):
             Rest-frame fluxes
         
         """
-        import multiprocessing as mp
+        import joblib
         import time
         
         NREST = len(f_numbers)
@@ -3448,43 +3446,41 @@ class PhotoZ(object):
             f_rest[_ix,:,:] = _frest
             
         else:     
-            # Threaded     
+            # joblib
             if n_proc < 0:
-                n_proc = np.maximum(mp.cpu_count() - 2, 1)
+                n_proc = np.maximum(joblib.cpu_count() - 2, 1)
             
             skip = np.maximum(len(idx)//par_skip+1, 1)
             
             n_proc = np.minimum(n_proc, skip)
-            np_check = np.minimum(mp.cpu_count(), n_proc)
+            np_check = np.minimum(joblib.cpu_count(), n_proc)
             
             t0 = time.time()
 
-            pool = mp.Pool(processes=np_check)
-            jobs = [pool.apply_async(_fit_rest_group, 
-                                          (idx[i::skip], 
-                                           fnu_corr[idx[i::skip],:], 
-                                           efnu_corr[idx[i::skip],:], 
-                                           izbest[idx[i::skip]], 
-                                           self.zbest[idx[i::skip]], 
-                                           self.zp*1, 
-                                           ndraws, 
-                                           fitter,
-                                           self.tempfilt,
-                                           self.ARRAY_DTYPE, 
-                                           rf_tempfilt,
-                                           percentiles, 
-                                           rf_lc,
-                                           pad_width,
-                                           max_err,
-                                           skip))
-                        for i in range(skip)]
+            from joblib import Parallel, delayed
+            jobs = Parallel(n_jobs=np_check, return_as=JOBLIB_RETURN_AS)(
+                delayed(_fit_rest_group)(
+                    idx[i::skip], 
+                    fnu_corr[idx[i::skip],:], 
+                    efnu_corr[idx[i::skip],:], 
+                    izbest[idx[i::skip]], 
+                    self.zbest[idx[i::skip]], 
+                    self.zp*1, 
+                    ndraws, 
+                    fitter,
+                    self.tempfilt,
+                    self.ARRAY_DTYPE, 
+                    rf_tempfilt,
+                    percentiles, 
+                    rf_lc,
+                    pad_width,
+                    max_err,
+                    skip
+                )
+                for i in range(skip))
 
-            pool.close()
-            #pool.join()
-
-            for res in tqdm(jobs):
-                _ = res.get(timeout=MULTIPROCESSING_TIMEOUT)
-                _ix, _frest = _                
+            for res in tqdm(jobs, total=skip):
+                _ix, _frest = res
                 f_rest[_ix,:,:] = _frest
             #
             t1 = time.time()
@@ -5404,7 +5400,7 @@ class TemplateGrid(object):
             redshift
             
         """
-        import multiprocessing as mp
+        import joblib
         import astropy.units as u
         from astropy.cosmology import WMAP9
         
@@ -5452,25 +5448,23 @@ class TemplateGrid(object):
             if n_proc >= 0:
                 # Parallel            
                 if n_proc == 0:
-                    pool = mp.Pool(processes=mp.cpu_count())
+                    np_check = joblib.cpu_count()
                 else:
-                    np_check = np.minimum(mp.cpu_count(), n_proc)
-                    pool = mp.Pool(processes=np_check)
-                
-                jobs = [pool.apply_async(_integrate_tempfilt,
-                                            (itemp,
-                                             templates[itemp], 
-                                             zgrid, RES,
-                                             f_numbers, add_igm,
-                                             galactic_ebv, Eb,
-                                             filters))
-                           for itemp in range(self.NTEMP)]
+                    np_check = np.minimum(joblib.cpu_count(), n_proc)
 
-                pool.close()
-                #pool.join()
-                
-                for res in tqdm(jobs):
-                    itemp, tf_i = res.get(timeout=MULTIPROCESSING_TIMEOUT)
+                from joblib import Parallel, delayed
+                jobs = Parallel(n_jobs=np_check, return_as=JOBLIB_RETURN_AS)(
+                    delayed(_integrate_tempfilt)(
+                        itemp,
+                        templates[itemp], 
+                        zgrid, RES,
+                        f_numbers, add_igm,
+                        galactic_ebv, Eb,
+                        filters)
+                    for itemp in range(self.NTEMP))
+
+                for res in tqdm(jobs, total=self.NTEMP):
+                    itemp, tf_i = res
                     if verbose > 1:
                         self.tempfilt[:,itemp,:] = tf_i        
             
