@@ -5759,6 +5759,53 @@ def fit_by_redshift(iz, z, A, fnu_corr, efnu_corr, TEFz, zp, verbose, fitter):
     if verbose > 2:
         print('z={0:7.3f}'.format(z))
     
+    if fitter == "nnls_jax": # for nnls_jax, we will use vmap-ed version instead of the "for" loop.
+        from .photoz_jax import template_lsq_map as template_lsq_jax_map
+        from .photoz_jax import template_lsq as template_lsq_jax
+
+        iobj0_ = np.sum((efnu_corr > 0) & np.isfinite(fnu_corr) & np.isfinite(efnu_corr),
+                       axis=1) > 2
+
+        iobj0 = np.arange(len(iobj0_))[iobj0_] # mask to indices
+
+        istep = 128
+
+        i = -istep  # incase len(iobj0) < istep where i won't be set.
+
+        # FIXME It does seem to make it slower if we use vmap-ed version.
+        # cc, coe = [], []
+        # for i in range(0, len(iobj0) - istep, istep):
+        #     iobj = iobj0[i:i+istep]
+        #     fnu_i = fnu_corr[iobj, :]
+        #     efnu_i = efnu_corr[iobj,:]
+
+        #     _res = template_lsq_jax_map(fnu_corr[iobj], efnu_corr[iobj], A, TEFz, zp)
+
+        #     chi2[iobj], coeffs[iobj] = _res
+        #     # cc.extend(_res[0])
+        #     # coe.extend(_res[1])
+
+        iobj_remain = iobj0[i+istep:]
+        if len(iobj_remain):
+            # for iobj in range(NOBJ):
+            for iobj in iobj_remain:
+                fnu_i = fnu_corr[iobj, :]
+                efnu_i = efnu_corr[iobj,:]
+                ok_band = (efnu_i > 0)
+
+                # if ok_band.sum() < 2:
+                #     continue
+
+                _res = template_lsq_jax(fnu_i, efnu_i, A, TEFz, zp)
+                chi2[iobj], coeffs[iobj] = _res
+                # cc.append(_res[0])
+                # coe.append(_res[1])
+
+        # chi2[iobj0] = cc
+        # coeffs[iobj0] = coe
+
+        return iz, chi2, coeffs
+
     for iobj in range(NOBJ):
         
         fnu_i = fnu_corr[iobj, :]
