@@ -1505,7 +1505,7 @@ class PhotoZ(object):
         self.fit_catalog(*args, **kwargs)
 
 
-    def fit_catalog(self, idx=None, n_proc=4, verbose=True, get_best_fit=True, prior=False, beta_prior=False, fitter='nnls', **kwargs):
+    def fit_catalog(self, idx=None, n_proc=4, verbose=True, get_best_fit=True, prior=False, beta_prior=False, fitter='nnls', do_tqdm=True, **kwargs):
         """
         This is the main function for fitting redshifts for a full catalog
         and is parallelized by fitting each redshift grid step separately.
@@ -1615,7 +1615,12 @@ class PhotoZ(object):
             )
 
             # Gather results
-            for res in tqdm(jobs, total=len(self.zgrid)):
+            if do_tqdm:
+                it = tqdm(jobs, total=len(self.zgrid))
+            else:
+                it = jobs
+
+            for res in it:
                 iz, chi2, coeffs = res
                 self.chi2_fit[idx_fit,iz] = chi2
                 self.fit_coeffs[idx_fit,iz,:] = coeffs
