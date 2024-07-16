@@ -1573,6 +1573,7 @@ class PhotoZ(object):
         missing = self.fnu[idx_fit,:] < self.param['NOT_OBS_THRESHOLD']
         efnu_corr[missing] = self.param['NOT_OBS_THRESHOLD'] - 9.
         
+        print("<< start fit_catalog")
         t0 = time.time()
         if (n_proc == 0) | (joblib.cpu_count() == 1):
             # Serial by redshift
@@ -1615,11 +1616,14 @@ class PhotoZ(object):
             )
 
             # Gather results
-            for res in tqdm(jobs, total=len(self.zgrid)):
+            # for res in tqdm(jobs, total=len(self.zgrid)):
+            for res in jobs:
                 iz, chi2, coeffs = res
                 self.chi2_fit[idx_fit,iz] = chi2
                 self.fit_coeffs[idx_fit,iz,:] = coeffs
         
+        print(">> end fit_catalog")
+
         # Compute maximum likelihood redshift zml
         if get_best_fit:
             if verbose:
@@ -3494,16 +3498,26 @@ class PhotoZ(object):
         """
         Uncertainty + TEF component of the log likelihood
         """
-        if HAS_TQDM:
-            iters = tqdm(enumerate(self.zgrid))
-        else:
-            iters = enumerate(self.zgrid)
-            
+
+        from joblib import Parallel, delayed, cpu_count
+
         tef_lnp = np.zeros((self.NOBJ, self.NZ), dtype=self.ARRAY_DTYPE)
-        for i, z in iters:
-            TEFz = self.TEF(z)
-            var = self.efnu**2 + (TEFz*np.maximum(self.fnu, 0.))**2
-            tef_lnp[:,i] = -0.5*(np.log(var)*self.ok_data).sum(axis=1)
+        fnu_filtered_squared = np.maximum(self.fnu, 0.)**2
+        efnu_squared = self.efnu**2
+
+        print(">> start compute_tef_lnp")
+        np_check = cpu_count()
+        jobs = Parallel(n_jobs=np_check, return_as=JOBLIB_RETURN_AS)(
+            delayed(_tef_lnp_log_var)(
+                i, self.TEF, z, efnu_squared, fnu_filtered_squared
+                )
+            for i, z in enumerate(self.zgrid))
+
+        for res in tqdm(jobs, total=len(self.zgrid)):
+            i, log_var = res
+            tef_lnp[:,i] = -0.5*(log_var*self.ok_data).sum(axis=1)
+
+        print("<< end compute_tef_lnp")
         
         if in_place:
             self.tef_lnp = tef_lnp
@@ -6200,3 +6214,7 @@ def template_lsq(fnu_i, efnu_i, A, TEFz, zp, ndraws, fitter):
     return chi2_i, coeffs_i, fmodel, coeffs_draw
 
 
+def _tef_lnp_log_var(i, tef, z, efnu_squared, fnu_filtered_squared):
+    TEFz = tef(z)
+    var = efnu_squared + TEFz**2 * fnu_filtered_squared # (TEFz*fnu_filtered)**2
+    return i, np.log(var)
