@@ -3713,8 +3713,10 @@ class PhotoZ(object):
         
         zbest = self.zgrid[izmax]
         lnpmax = np.zeros_like(zbest)
-        
-        zbest[izmax == 0] = -1
+
+        # YY: still use the boundary Z_MIN!
+	# with this, there will be too many zbest = -1 (i.e., fitting fails)
+        # zbest[izmax == 0] = -1
         
         mask = (izmax > 0) & (izmax < self.NZ-1) & has_chi2
         
