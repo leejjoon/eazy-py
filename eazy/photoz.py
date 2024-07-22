@@ -1493,6 +1493,57 @@ class PhotoZ(object):
         
         return ampl, chi2, logpz
 
+    def fit_single_templates_vectorized(self, verbose=True):
+        """
+        Fit individual templates on the redshift grid
+        ## YY: vectorized version
+        ##     but this module use only 1 proc, why?
+        """
+    
+        ampl = np.zeros((self.NTEMP, self.NOBJ, self.NZ), 
+                        dtype=self.ARRAY_DTYPE)
+        chi2 = np.zeros((self.NTEMP, self.NOBJ, self.NZ),
+                        dtype=self.ARRAY_DTYPE)
+    
+        # Initialize the arrays
+        tempfilt = self.tempfilt.tempfilt
+        zgrid = self.zgrid
+    
+        # Transpose the template filter array
+        templ = tempfilt.transpose(1, 2, 0)  # (NTEMP, NFILT, NZ)
+    
+        # Loop over redshifts
+        for iz in range(self.NZ):
+            tefz = self.TEF(self.zgrid[iz])
+    
+            # Compute full error for the observations
+            full_err = np.sqrt(self.efnu**2 + (self.fnu * tefz)**2)
+    
+            # Compute numerator and denominator for all templates at once
+            # num, den: [NOBJ, NTEMP]
+            num = np.einsum('of,tf->ot', (self.fnu/self.zp / full_err * self.ok_data), templ[:, :, iz])
+            den = np.einsum('of,tf->ot', (          1. / full_err * self.ok_data), templ[:, :, iz]**2)
+    
+            # Compute amplitudes for all templates and objects at once
+            ampl[:, :, iz] = (num / den).T  # [NTEMP, NOBJ, iz]
+    
+            # Compute model flux for all templates and objects
+            mz = ampl[:, :, iz][:,:,None] * templ[:, :, iz][:,None,:]
+            chi = ((mz - self.fnu[None, :, :]/self.zp) * self.ok_data[None, :, :])**2 / full_err[None, :, :]**2
+            chi2[:, :, iz] = chi.sum(axis=2)  # Transpose to match the shape
+    
+        chimin = chi2.min(axis=2).min(axis=0)
+        if verbose:
+            print('Compute p(z|T)')
+    
+        logpz = -(chi2 - chimin[None,:,None])/2
+    
+        pzt = np.exp(logpz).sum(axis=0)
+        pznorm = np.trapz(pzt, self.zgrid, axis=1)
+        logpz -= np.log(pznorm[None,:,None])
+    
+        return ampl, chi2, logpz
+    
 
     def fit_parallel(self, *args, **kwargs):
         """
