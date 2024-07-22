@@ -279,6 +279,10 @@ class PhotoZ(object):
                     resample_wave=self.param['RESAMPLE_WAVE'])
                           
         self.templates = templates_module.read_templates_file(**kws)
+
+        ### YY: Update MIN_VALID_FILTERS
+        global MIN_VALID_FILTERS
+        MIN_VALID_FILTERS = self.param['N_MIN_COLORS']
         
         ### Set redshift fit grid
         self.set_zgrid()
@@ -2701,9 +2705,21 @@ class PhotoZ(object):
         ## Evaluate coeffs at specified redshift
         tef_i = self.TEF(z)
         A = np.squeeze(self.tempfilt(z))
-        chi2_i, coeffs_i, fmodel, draws = template_lsq(fnu_i, efnu_i, A, 
-                                                   tef_i, self.zp, 
-                                                   ndraws, fitter)
+
+        ## YY: add TEMPLATE_COMBOS=1 (fit_single_template)
+        ##     in this case, do not repeat the fitting with `fitter`, 
+        ##     just use the pre-determined values
+        if self.param.params['TEMPLATE_COMBOS'] in [1, '1']:
+            chi2_i = self.chi2_fit[ix,:]
+            iz = np.argmin(chi2_i)
+            coeffs_i = self.fit_coeffs[:,ix,iz]
+            fmodel = np.dot(coeffs_i, A)
+            draws = None
+        else:
+            chi2_i, coeffs_i, fmodel, draws = template_lsq(fnu_i, efnu_i, A, 
+                                                           tef_i, self.zp, 
+                                                           ndraws, fitter)
+
         if draws is None:
             efmodel = 0
         else:
@@ -6068,7 +6084,8 @@ def template_lsq(fnu_i, efnu_i, A, TEFz, zp, ndraws, fitter):
     from scipy.optimize import nnls
     import scipy.optimize
     
-    global MIN_VALID_FILTERS
+    ### YY: unset global variable
+    ### global MIN_VALID_FILTERS
     global BOUNDED_DEFAULTS
     
     sh = A.shape
